@@ -109,6 +109,94 @@ function toggleMenu(nav, navSections, forceExpanded = null) {
 }
 
 /**
+ * Capitalises a URL slug: "my-cool-page" → "My Cool Page".
+ * Used as a fallback when the page title is not in the query-index.
+ */
+function prettifySlug(slug) {
+  return slug
+    .split('-')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+/**
+ * Builds the list of crumbs for the current URL.
+ * Tries to use real page titles from /query-index.json; falls back to
+ * a prettified slug when the index is missing or doesn't list the path.
+ */
+async function getBreadcrumbCrumbs() {
+  const segments = window.location.pathname.split('/').filter(Boolean);
+  const crumbs = [{ title: 'Home', url: '/' }];
+
+  // Try to load the site's query-index for nice titles.
+  let pageIndex = null;
+  try {
+    const res = await fetch('/query-index.json');
+    if (res.ok) {
+      const json = await res.json();
+      pageIndex = json.data;
+    }
+  } catch (e) {
+    // Index missing or not generated yet — that's fine, we'll fall back.
+  }
+
+  let cumulative = '';
+  segments.forEach((segment, i) => {
+    cumulative += `/${segment}`;
+    let title = prettifySlug(segment);
+
+    if (pageIndex) {
+      const hit = pageIndex.find((p) => p.path === cumulative);
+      if (hit && hit.title) title = hit.title;
+    }
+
+    // For the current page, prefer the document title we already have.
+    if (i === segments.length - 1) {
+      const pageTitle = getMetadata('og:title') || document.title;
+      if (pageTitle) title = pageTitle.split(' | ')[0].trim();
+    }
+
+    crumbs.push({ title, url: cumulative });
+  });
+
+  return crumbs;
+}
+
+/**
+ * Build the breadcrumb element, gated on the `breadcrumbs` page metadata.
+ * Returns null when breadcrumbs are disabled — caller should check.
+ */
+async function buildBreadcrumbs() {
+  const flag = (getMetadata('breadcrumbs') || '').toLowerCase();
+  if (flag !== 'true' && flag !== 'on') return null;
+
+  const wrapper = document.createElement('nav');
+  wrapper.className = 'breadcrumbs';
+  wrapper.setAttribute('aria-label', 'Breadcrumb');
+
+  const ol = document.createElement('ol');
+  const crumbs = await getBreadcrumbCrumbs();
+
+  crumbs.forEach((crumb, i) => {
+    const li = document.createElement('li');
+    if (i === crumbs.length - 1) {
+      // Current page — render as plain text with aria-current.
+      li.textContent = crumb.title;
+      li.setAttribute('aria-current', 'page');
+    } else {
+      const a = document.createElement('a');
+      a.href = crumb.url;
+      a.textContent = crumb.title;
+      li.append(a);
+    }
+    ol.append(li);
+  });
+
+  wrapper.append(ol);
+  return wrapper;
+}
+
+/**
  * loads and decorates the header, mainly the nav
  * @param {Element} block The header block element
  */
@@ -167,5 +255,10 @@ export default async function decorate(block) {
   const navWrapper = document.createElement('div');
   navWrapper.className = 'nav-wrapper';
   navWrapper.append(nav);
+
+  // append breadcrumbs below the nav when enabled via page metadata
+  const breadcrumbs = await buildBreadcrumbs();
+  if (breadcrumbs) navWrapper.append(breadcrumbs);
+
   block.append(navWrapper);
 }
